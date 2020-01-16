@@ -1,0 +1,11 @@
+Package: GObiases_human
+Type: Package
+Title: GO biases human
+Version: 0.1.0
+Author: Who wrote it
+Maintainer: The package maintainer <yourself@somewhere.net>
+Description: This package is for processing functional analyses for human
+data to be used in GOliath. 
+License: What license is it under?
+Encoding: UTF-8
+LazyData: true

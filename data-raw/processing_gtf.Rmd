@@ -1,0 +1,49 @@
+---
+title: "Processing GTF file"
+author: "Laura Biggins"
+date: "01/10/2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("magrittr")
+library(runGOA)
+```
+
+## Generating a gene info file for the human genome
+
+The script create_gene_info_file_from_gtf.pl takes a gtf file and parses it to create a gene info file that contains all the genes that are annotated in the gtf file. This should be all the genes in that version of the genome.
+
+Downloaded gtf file from Ensembl
+`wget ftp://ftp.ensembl.org/pub/release-98/gtf/homo_sapiens/Homo_sapiens.GRCh38.98.gtf.gz`
+
+Downloaded the raw version of the processing script from github 
+`wget https://raw.githubusercontent.com/s-andrews/GOliath/master/processing/gene_info_processing/create_gene_info_file_from_gtf.pl`
+
+Run this script to create the gene info file 
+`./create_gene_info_file_from_gtf.pl --gtf Homo_sapiens.GRCh38.98.gtf.gz --genome GRCh38`   
+
+
+```{r import}
+genfo <- readr::read_tsv("Homo_sapiens.GRCh38.98_gene_info.txt", col_types = "ccciicccidi")
+genfo <- genfo %>%
+    dplyr::select(-dplyr::starts_with("biotype"))
+genfo
+```
+
+
+```{r, eval = FALSE}
+usethis::use_data(genfo, overwrite = TRUE)
+```
+
+
+```{r}
+all_background_genes_human <- unique(as.vector(unlist(runGOA::human_categories)))
+all_go_categories_human    <- runGOA::human_categories
+
+usethis::use_data(all_go_categories_human, overwrite = TRUE)
+usethis::use_data(all_background_genes_human, overwrite = TRUE)
+```

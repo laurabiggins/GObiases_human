@@ -1,0 +1,393 @@
+---
+title: "1. Human length biased"
+author: "Laura Biggins"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message = FALSE, warning = FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+display_code <- FALSE
+knitr::opts_knit$set(global.par = TRUE, width=75)
+knitr::opts_chunk$set(
+                echo    = display_code,
+                prompt  = FALSE,
+                tidy    = TRUE,
+                comment = NA,
+                message = FALSE,
+                warning = FALSE)
+                #cache=TRUE)
+
+library(rmdformats)
+library(runGOA)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(beanplot)
+palette(brewer.pal(6, "Set2"))
+
+par(mgp = c(2, 0.5, 0))
+par(mar = par()$mar * 0.7)
+#load_all()
+min_appearances <- 20
+```
+
+```{r DT_function}
+dt_setup <-  function(data, n_rows = 10, lineHeight="80%") {
+  DT::datatable(data,
+                rownames = FALSE,
+                options = list(dom = 't', 
+                              pageLength = n_rows)
+  ) %>%
+  DT::formatStyle(0, target = 'row', lineHeight = lineHeight)
+}
+
+dark_b_blue <- "#374772" 
+light_b_blue <- "#3cc1f2"
+```
+
+
+### Generate lists of human genes biased by the length of the genes.
+    
+Use a gene info file derived from a gtf file from Ensembl containing all the genes
+and transcripts in the human genome. 
+We then filter this for all the genes that are annotated with at least one functional 
+category.
+We can extract the lengths of the genes from this filtered set of genes and plot 
+them so that some thresholds for length categories can be determined.
+
+```{r import}
+load("../data/genfo.rda")
+load("../data/all_go_categories_human.rda")
+
+all_GO_annotated_genes <- unique(as.vector(unlist(all_go_categories_human)))
+
+genfo_all_genes <- genfo
+
+genfo <- genfo %>%
+    select(gene_name, length) %>%
+    mutate(log2_length = round(log2(length), digits = 2)) %>%
+    filter(gene_name %in% all_GO_annotated_genes)
+```
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+dt_setup(genfo, n_rows = 6)
+```
+</div>
+<div class = "col-md-6">
+<br><br>
+```{r}
+genfo %>%
+    ggplot(aes(x = log2_length)) +
+    geom_density(size = 1, colour = dark_b_blue) +
+    ggtitle("Length distribution of all genes in the human genome")
+```
+</div>
+</div>
+<br><br>
+
+## Length thresholds         
+
+```{r}
+thresholds <- genfo %>%
+    pull(log2_length) %>%
+    quantile(probs = c(0.02, 0.05, 0.1, 0.9, 0.95, 0.98)) %>%
+    tibble::enframe()
+```
+
+
+<div class = "row">
+<div class = "col-md-8">
+```{r}
+genfo %>%
+    ggplot(aes(x = log2_length)) +
+    geom_density(size = 1, colour = dark_b_blue) +
+    #scale_y_continuous(expand = c(0, 0), limits = c(0, 0.12)) +
+    geom_vline(data = thresholds, 
+               aes(xintercept = value), 
+               color = light_b_blue, 
+               linetype = "dashed",
+               size = 1) +
+    ggtitle("Length distribution of all genes in the human genome")
+    
+```
+</div>
+<div class = "col-md-4">
+```{r}
+dt_setup(thresholds)
+```
+</div>
+</div>
+
+
+## Number of genes in each category
+
+```{r, fig.height = 6, results = FALSE, fig.width = 10}
+thresholds <- thresholds %>%
+    mutate(category = c("very_very_short", "very_short", "short", "long", "very_long", "very_very_long")) %>%
+    mutate(fill_area = c(rep("less", 3), rep("more", 3))) 
+
+dens <- density(genfo$log2_length)
+
+par(mfrow = c(2, 3))
+
+plotThreshold <- function(length_cat){
+
+  info <- filter(thresholds, category == length_cat)    
+   
+  plot(dens, lwd = 2, xlab = "log2 gene length", main = length_cat)
+   
+  if (info$fill_area == "less") {
+    filt <- dens$x <= info$value
+    polygon(
+      c(dens$x[filt], info$value), 
+      c(dens$y[filt], 0), 
+      col = light_b_blue
+    )
+     n_genes <- filter(genfo, log2_length <= info$value) %>%
+        count() %>%
+        pull(n)
+   
+  } else if (info$fill_area == "more") {
+    filt <- dens$x > info$value
+    polygon(
+      c(dens$x[filt], info$value), 
+      c(dens$y[filt], 0), 
+      col = light_b_blue
+    )
+    n_genes <- filter(genfo, log2_length >= info$value) %>%
+        count() %>%
+        pull(n)
+    
+  } else {
+    return(warning("something went wrong here"))
+  }
+   
+  label_text <- paste0("n = ", n_genes)
+  text(x = 19, y = 0.09, labels = label_text, cex = 1.5)
+}
+
+sapply(thresholds$category, plotThreshold)
+```
+
+
+```{r}
+# Helper functions for GO analysis
+get_threshold <- function(category_name){
+     filter(thresholds, category == category_name) %>%
+        pull(value)
+}
+
+get_genes_for_length_category <- function(length_category) {
+    
+    if(grepl("short", length_category)){
+       filtered <- filter(genfo, log2_length <= get_threshold(length_category))
+       
+    } else if(grepl("long", length_category)) {
+       filtered <- filter(genfo, log2_length >= get_threshold(length_category))
+    
+    } else {
+        stop("category type must be short or long")
+    
+    }    
+    filtered  %>%
+        sample_n(size = 200) %>%
+        pull(gene_name)
+}       
+```
+
+
+```{r GO_analysis, eval = FALSE}
+load("../data/all_go_categories_human.rda")
+load("../data/all_background_genes_human.rda")
+library("magrittr")
+
+go_category_counts <- tibble(GO_category = names(all_go_categories_human))
+
+summary_stats <- tibble(run_number    = rep(1:100, times = 6), 
+                        bias_category = rep(thresholds$category, each = 100), 
+                        sig_number_results = 0)
+
+summary_stats$sig_number_results %<>% as.integer
+
+unique_genes_in_categories <- unique(as.vector(unlist(all_go_categories_human)))
+
+for (i in 1:length(thresholds$category)){
+    
+    bias_category <- thresholds$category[i]
+   
+    go_category_counts <- mutate(go_category_counts, occurrences = 0)
+
+    for(j in 1:100) {
+        
+        genes <- get_genes_for_length_category(length_category = bias_category)
+        
+        go_results <- overrep_test(all_go_categories_human, query_genes = genes, all_background_genes_human, pval_threshold = 0.05, ease = FALSE)
+        
+        if(length(go_results) > 0){
+           
+            summary_stats <- summary_stats %>%
+                mutate(sig_number_results = if_else(bias_category == !!bias_category & run_number == j, nrow(go_results), sig_number_results))
+        }  
+        
+        go_category_counts <- go_category_counts %>%
+            mutate(occurrences = if_else(GO_category %in% rownames(go_results), occurrences + 1, occurrences)) 
+    }
+
+    # I couldn't get tidyverse to work properly with mutating column names and adding to them, so we'll rename afterwards
+    go_category_counts <- rename(go_category_counts, !!bias_category := occurrences)
+
+}
+
+human_length_biased  <- go_category_counts
+human_length_summary <- summary_stats
+
+usethis::use_data(human_length_biased, overwrite = TRUE)
+usethis::use_data(human_length_summary, overwrite = TRUE)
+```
+
+
+## Generating the biased gene sets and running the GO analysis
+
+<br>
+1. Randomly select 200 genes from the subset of genes in the long and short categories.
+<br><br>
+2. Run functional enrichment analysis, record results.
+<br><br>
+3. Repeat steps 1 and 2, 100 times.
+<br><br>
+Repeat this for each length category.
+
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+load("../data/human_length_biased.rda")
+load("../data/human_length_summary.rda")
+
+category_counts <- human_length_summary %>%
+    filter(sig_number_results > 0) %>%
+    group_by(bias_category) %>%
+    count(bias_category)
+
+dt_setup(category_counts)
+```
+</div>
+<div class = "col-md-6">
+<br><br>
+The table shows the number of functional enrichment analyses that returned 1 or 
+more significantly enriched categories from the 100 that were run. 
+</div> 
+</div>
+</div> 
+<br>
+
+## Identified categories
+
+The number of times that a functional category was identified from the 100 times
+that the analysis was run for each bias category.
+The table contains every functional category that appeared once or more in any 
+of the bias categories.
+
+```{r}
+all_identified_categories <- human_length_biased %>%
+  filter_at(vars(-GO_category), any_vars(. > 0))
+
+dt_setup(all_identified_categories)  
+```
+
+In total, `r nrow(all_identified_categories)` functional categories appeared 
+at least once.
+
+
+## Filter Categories
+
+We don't want categories that only appeared a handful of times so we'll use an 
+arbitrary value of `r min_appearances` as a threshold.
+
+```{r}
+suspects_for_violin <- human_length_biased %>%
+  tidyr::gather(-GO_category, key = "bias_category", value = "occurrences") %>%
+  filter(occurrences > min_appearances) %>%
+  mutate(bias_category = factor(bias_category, levels = c("very_very_short", "very_short", "short", "long", "very_long", "very_very_long")))
+```
+
+```{r fig.height = 4, fig.width = 10}
+total_counts <- suspects_for_violin %>%
+  count(bias_category)
+
+suspects_for_violin  %>%
+    ggplot(aes(x = bias_category, y = occurrences)) +
+    geom_violin(fill = light_b_blue, colour = dark_b_blue, lwd = 0.8) +
+    xlab("") +
+    ylab("number of times category was identified") +
+    theme_bw() +
+    theme(axis.text.x = element_text(size = 12)) +
+    geom_dotplot(binaxis='y', stackdir='center', dotsize=0.05, colour = dark_b_blue) +
+    geom_label(data = total_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:nrow(total_counts), y = 110)) 
+```
+
+## Deduplicate
+
+We've mostly got results from the very very long set but there are a few in the 
+long set too so we'll deduplicate any that are found in both.
+
+The deduplicated sets of functional categories are written to file and added to 
+the set of potentially biased categories.
+
+```{r deduplicate}
+very_short_set <- suspects_for_violin %>%
+  filter(bias_category == "very_short") %>%
+  pull(GO_category)
+
+very_long_set <- suspects_for_violin %>%
+  filter(bias_category == "very_long") %>%
+  pull(GO_category)
+
+vv_long_set <- suspects_for_violin %>%
+  filter(bias_category == "very_very_long") %>%
+  pull(GO_category)
+vv_long_set <- vv_long_set[!vv_long_set %in% very_long_set]
+
+suspects <- list(
+   "very_short" = very_short_set,
+   "very_long"  = very_long_set, 
+   "vv_long"    = vv_long_set
+)
+
+
+```
+
+```{r} 
+#eval=FALSE, echo = FALSE}
+# write out file with unix line endings
+for (i in 1:length(suspects)) {
+  
+  filename <- paste0("../data/", names(suspects)[i], ".txt")
+  output_file <- file(filename, "wb")
+  
+  write.table(file = output_file, 
+              x = suspects[[i]], 
+              row.names = FALSE,
+              col.names = FALSE, 
+              quote = FALSE)
+  
+  close(output_file)
+}
+```
+
+
+
+```{r}
+#Total number of functional categories tested = `r nrow(human_length_biased)`
+```
+
+

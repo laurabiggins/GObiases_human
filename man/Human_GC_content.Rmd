@@ -1,0 +1,439 @@
+---
+title: "Human GC content"
+author: "Laura Biggins"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message = FALSE, warning = FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+display_code <- FALSE
+knitr::opts_knit$set(global.par = TRUE, width=75)
+knitr::opts_chunk$set(
+                echo    = display_code,
+                prompt  = FALSE,
+                tidy    = TRUE,
+                comment = NA,
+                message = FALSE,
+                warning = FALSE)
+                #cache=TRUE)
+
+library(rmdformats)
+library(runGOA)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(beanplot)
+palette(brewer.pal(6, "Set2"))
+
+par(mgp = c(2, 0.5, 0))
+par(mar = par()$mar * 0.7)
+#load_all()
+min_appearances <- 20
+```
+
+```{r DT_function}
+dt_setup <-  function(data, n_rows = 10, lineHeight="80%") {
+  DT::datatable(data,
+                rownames = FALSE,
+                options = list(dom = 't', 
+                              pageLength = n_rows)
+  ) %>%
+  DT::formatStyle(0, target = 'row', lineHeight = lineHeight)
+}
+
+dark_b_blue <- "#374772" 
+light_b_blue <- "#3cc1f2"
+```
+
+### Generate lists of human genes biased by the number of GCs for the genes.
+
+Use a gene info file derived from a gtf file from Ensembl containing all the genes
+and GCs in the human genome.
+
+```{r import_genfo_file}
+# The gene info file contains the number of GCs of all the genes in the human genome. 
+# The processing of it is described in the processing_gtf file.
+load("../data/genfo.rda")
+load("../data/all_go_categories_human.rda")
+
+all_GO_annotated_genes <- unique(as.vector(unlist(all_go_categories_human)))
+
+genfo_all_genes <- genfo
+
+genfo <- genfo %>%
+    filter(gene_name %in% all_GO_annotated_genes)
+
+```
+
+
+To check whether any gene ontology or other functional categories were associated 
+with high or low GC content, lists of genes were generated biased by GC content. 
+
+Preliminary work looking at GC biases using intervals over the whole range of GC 
+content in the genome only identified categories using genes with high or low GC content, 
+not the intermediate ranges, so we're focusing on the ends of the distribution.
+
+## GC distribution for all the genes in Mus_musculus.GRCm38.94
+
+```{r fig.height = 3, fig.width = 4}
+plot(density(genfo$GC_content), lwd = 2, main = "", xlab = "GC content", xlim = c(0.25,0.75))
+```
+<br><br>
+
+## Selecting GC thresholds
+
+The GC content thresholds will be based on the distribution of GC content over all genes.
+The probabilities selected will be 0.01, 0.05, 0.1, 0.9, 0.95, 0.99.
+```{r}
+library("magrittr")
+probabilities <-  c(0.02, 0.05, 0.1, 0.9, 0.95, 0.98)
+thresholds <- quantile(genfo$GC_content, probs = probabilities)
+
+more_less <- c(
+  vv_low_GC    = "less",
+  very_low_GC  = "less", 
+  low_GC       = "less", 
+  high_GC      = "more", 
+  very_high_GC = "more", 
+  vv_high_GC   = "more"
+)
+
+names(thresholds)    <- names(more_less)
+names(probabilities) <- names(more_less)
+
+gene_counts <- sapply(names(thresholds), function(category_filter){
+  if (more_less[category_filter] == "less") {
+    sum(genfo$GC_content <= thresholds[category_filter])
+  }
+  else {
+     sum(genfo$GC_content >= thresholds[category_filter])
+  }
+})
+
+gene_counts_tibble <- tibble::enframe(gene_counts, name = "category", value = "gene count") %>%
+  dplyr::mutate(probabilities = probabilities)
+
+# Convert thresholds to tibble so it's compatible with the GO analysis functions
+thresholds_tibble <- tibble::enframe(thresholds, name = "category", value = "threshold_value")
+
+```
+<div class = "row">
+<div class = "col-md-5">
+```{r}
+DT::datatable(gene_counts_tibble, options = list(dom = 't'), rownames = FALSE)
+```
+</div>
+
+<div class = "col-md-7">
+<br>
+```{r, results = FALSE}
+plot(density(genfo$GC_content), 
+     lwd  = 2, 
+     main = paste0("GC content of genes in human genome"), 
+     xlab = "log2 gene length",
+     xlim = c(0.28,0.71)
+     )
+
+sapply(names(thresholds), function(x){
+  colours <- as.factor(more_less)
+  abline(v = thresholds[x], col = colours[x], lwd = 2, lty = 2)
+})
+```
+</div>
+</div>
+<br><br>
+
+```{r highlight_density, fig.height = 6, results = FALSE, fig.width = 10}
+par(mfrow = c(2, 3))
+
+dens <- density(genfo$GC_content)
+
+sapply(names(thresholds), function(category_filter){
+
+  if (more_less[category_filter] == "less") {
+
+    filt <- dens$x < thresholds[category_filter]
+    colour <- 1
+    n_genes <- sum(genfo$GC_content < thresholds[category_filter])
+    x_location <- 0.3
+    title_text <- " <= "
+  
+    } else {
+    
+    filt <- dens$x > thresholds[category_filter]
+    colour <- 2
+    n_genes <- sum(genfo$GC_content > thresholds[category_filter])
+    x_location <- 0.65
+    title_text <- " >= "
+
+    }
+  
+    plot(dens, 
+       lwd  = 2, 
+       xlab = "GC content", 
+       xlim = c(0.2,0.75),
+       main = paste0(
+         category_filter, 
+         ", GC",
+         title_text,
+         thresholds[category_filter],
+         ", p",
+         title_text,
+         probabilities[category_filter])
+    )
+  
+    polygon(
+      c(dens$x[filt], thresholds[category_filter]), 
+      c(dens$y[filt], 0), 
+      col = colour
+    )
+   label_text <- paste0("n = ", n_genes)
+   text(x = x_location, y = 4, labels = label_text, cex = 1.5, col = colour, font = 2)
+
+})  
+
+```
+<br><br>
+
+## Generating the biased gene lists and running them through functional enrichment analysis
+
+1. The thresholds are used to filter the set of genes. 
+2. 200 genes are then randomly selected from the filtered set. 
+3. These are run through a functional enrichment analysis and the results are recorded.
+
+The steps are repeated 100 times for each threshold.
+
+The helper functions and the GO analysis code should be extracted
+
+
+
+
+```{r helper_functions}
+get_threshold <- function(category_name){
+     filter(thresholds, category == category_name) %>%
+        pull(threshold_value)
+}
+
+# For vv low GC, hardly any of the genes we selected had GO annotations, so we weren't 
+# getting any significant results.
+# We should filter by genes that have GO annotations
+get_genes_for_GC_category <- function(GC_category) {
+    
+    if(grepl("low", GC_category)){
+       filtered <- filter(genfo, GC_content <= get_threshold(GC_category))
+       
+    } else if(grepl("high", GC_category)) {
+       filtered <- filter(genfo, GC_content >= get_threshold(GC_category))
+    
+    } else {
+        stop("category type must be high or low")
+    
+    }    
+    filtered  %>%
+        sample_n(size = 200) %>%
+        pull(gene_name)
+}       
+```
+
+```{r GO_analysis, eval = FALSE}
+# This code is run once to get the GO analysis results- it takes a while to run
+# it 100 times for each bias category.
+
+#load("../data/all_go_categories_human.rda")
+load("../data/all_background_genes_human.rda")
+
+thresholds <- thresholds_tibble
+
+# set up the summary files so we can populate them as we get the GO analysis results
+go_category_counts <- tibble(GO_category = names(all_go_categories_human))
+
+summary_stats <- tibble(
+                      run_number         = rep(1:100, times = nrow(thresholds)), 
+                      bias_category      = rep(thresholds$category, each = 100), 
+                      sig_number_results = 0)
+
+summary_stats$sig_number_results %<>% as.integer
+
+
+for (i in 1:length(thresholds$category)){
+    
+    bias_category <- thresholds$category[i]
+   
+    go_category_counts <- mutate(go_category_counts, occurrences = 0)
+
+    for(j in 1:100) {
+
+        genes <- get_genes_for_GC_category(bias_category)
+        
+        #filter(genfo, gene_name %in% genes)
+        
+        go_results <- overrep_test(all_go_categories_human, 
+                                   query_genes = genes, 
+                                   all_background_genes_human, 
+                                   unique_genes_in_categories = all_GO_annotated_genes,
+                                   min_genes_in_category = 1, 
+                                   max_genes_in_category = 500000,
+                                   ease = FALSE)
+        
+        if(length(go_results) > 0){
+           
+            summary_stats <- summary_stats %>%
+                mutate(sig_number_results = if_else(
+                    bias_category == !!bias_category & run_number == j, 
+                    nrow(go_results), 
+                    sig_number_results
+                ))
+        }  
+        go_category_counts <- go_category_counts %>%
+            mutate(occurrences = if_else(GO_category %in% rownames(go_results), 
+                                         occurrences + 1, 
+                                         occurrences)
+                   ) 
+    }
+
+    # I couldn't get tidyverse to work properly with mutating column names and adding to them, so we'll rename afterwards
+    go_category_counts <- rename(go_category_counts, !!bias_category := occurrences)
+
+}
+
+human_GC_biased  <- go_category_counts
+human_GC_summary <- summary_stats
+
+usethis::use_data(human_GC_biased, overwrite = TRUE)
+usethis::use_data(human_GC_summary, overwrite = TRUE)
+```
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+load("../data/human_GC_biased.rda")
+load("../data/human_GC_summary.rda")
+
+category_counts <- human_GC_summary %>%
+    filter(sig_number_results > 0) %>%
+    group_by(bias_category) %>%
+    count(bias_category)
+
+dt_setup(category_counts)
+```
+</div>
+<div class = "col-md-6">
+<br><br>
+The table shows the number of functional enrichment analyses that returned 1 or 
+more significantly enriched categories from the 100 that were run. 
+</div> 
+</div>
+</div> 
+<br>
+
+## Identified categories
+
+The number of times that a functional category was identified from the 100 times
+that the analysis was run for each bias category.
+The table contains every functional category that appeared once or more in any 
+of the bias categories.
+
+```{r}
+all_identified_categories <- human_GC_biased %>%
+  filter_at(vars(-GO_category), any_vars(. > 0))
+
+dt_setup(all_identified_categories)  
+```
+
+In total, `r nrow(all_identified_categories)` functional categories appeared 
+at least once.
+
+
+## Filter Categories
+
+We don't want categories that only appeared a handful of times so we'll use an 
+arbitrary value of `r min_appearances` as a threshold.
+
+```{r}
+filtered_categories <- human_GC_biased %>%
+  filter_at(vars(-GO_category), any_vars(. > min_appearances))
+
+dt_setup(filtered_categories)  
+```
+
+
+```{r}
+suspects_for_violin <- human_GC_biased %>%
+  tidyr::gather(-GO_category, key = "bias_category", value = "occurrences") %>%
+  filter(occurrences > min_appearances) %>%
+    mutate(bias_category = factor(bias_category, levels = c("vv_low_GC", "very_low_GC", "very_high_GC", "vv_high_GC")))
+```
+
+```{r fig.height = 4, fig.width = 5}
+total_counts <- suspects_for_violin %>%
+  count(bias_category)
+
+suspects_for_violin  %>%
+    ggplot(aes(x = bias_category, y = occurrences)) +
+    geom_violin(fill = light_b_blue, colour = dark_b_blue, lwd = 0.8) +
+    xlab("") +
+    ylab("number of times category was identified") +
+    theme_bw() +
+    theme(axis.text.x = element_text(size = 12)) +
+    geom_dotplot(binaxis='y', stackdir='center', dotsize=0.1, colour = dark_b_blue) +
+    geom_label(data = total_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:nrow(total_counts), y = 100)) 
+```
+
+## Deduplicate
+
+There are a few overlapping categories. 
+The duplicate terms will be removed from the more stringent categories.
+
+```{r deduplicate}
+very_low_set <- suspects_for_violin %>%
+  filter(bias_category == "very_low_GC") %>%
+  pull(GO_category)
+
+vv_low_set <- suspects_for_violin %>%
+  filter(bias_category == "vv_low_GC") %>%
+  pull(GO_category)
+vv_low_set <- vv_low_set[!vv_low_set %in% very_low_set]
+
+
+very_high_set <- suspects_for_violin %>%
+  filter(bias_category == "very_high_GC") %>%
+  pull(GO_category)
+
+vv_high_set <- suspects_for_violin %>%
+  filter(bias_category == "vv_high_GC") %>%
+  pull(GO_category)
+vv_high_set <- vv_high_set[!vv_high_set %in% very_high_set]
+# none left in the vv high set
+
+suspects <- list(
+    "vv_low_GC"    = vv_low_set,
+    "very_low_GC"  = very_low_set,
+    "very_high_GC" = very_high_set
+)
+
+```
+
+```{r} 
+#eval=FALSE, echo = FALSE}
+# write out file with unix line endings
+for (i in 1:length(suspects)) {
+  
+  filename <- paste0("../data/", names(suspects)[i], ".txt")
+  output_file <- file(filename, "wb")
+  
+  write.table(file = output_file, 
+              x = suspects[[i]], 
+              row.names = FALSE,
+              col.names = FALSE, 
+              quote = FALSE)
+  
+  close(output_file)
+}
+```

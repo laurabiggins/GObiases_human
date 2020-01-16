@@ -1,0 +1,530 @@
+---
+title: "1. Human transcript biased"
+author: "Laura Biggins"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message = FALSE, warning = FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+display_code <- FALSE
+knitr::opts_knit$set(global.par = TRUE, width=75)
+knitr::opts_chunk$set(
+                echo    = display_code,
+                prompt  = FALSE,
+                tidy    = TRUE,
+                comment = NA,
+                message = FALSE,
+                warning = FALSE)
+                #cache=TRUE)
+
+library(rmdformats)
+library(runGOA)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(beanplot)
+palette(brewer.pal(6, "Set2"))
+
+par(mgp = c(2, 0.5, 0))
+par(mar = par()$mar * 0.7)
+#load_all()
+min_appearances <- 20
+```
+
+```{r DT_function}
+dt_setup <-  function(data, n_rows = 10, lineHeight="80%") {
+  DT::datatable(data,
+                rownames = FALSE,
+                options = list(dom = 't', 
+                              pageLength = n_rows)
+  ) %>%
+  DT::formatStyle(0, target = 'row', lineHeight = lineHeight)
+}
+
+dark_b_blue <- "#374772" 
+light_b_blue <- "#3cc1f2"
+```
+
+### Generate lists of human genes biased by the number of transcripts for the genes.
+
+Use a gene info file derived from a gtf file from Ensembl containing all the genes
+and transcripts in the human genome.
+
+<div class = "row">
+<div class = "col-md-4">
+```{r import_genfo_file}
+# The gene info file contains the number of transcripts of all the genes in the human genome. 
+# The processing of it is described in the processing_gtf file.
+load("../data/genfo.rda")
+load("../data/all_go_categories_human.rda")
+
+all_GO_annotated_genes <- unique(as.vector(unlist(all_go_categories_human)))
+
+genfo_all_genes <- genfo
+
+genfo <- genfo %>%
+    filter(gene_name %in% all_GO_annotated_genes)
+
+# count number of duplicate gene names - decide what to do about them...
+genfo %>%
+  count(gene_name) %>%
+  filter(n > 1) %>%
+  arrange(desc(n)) %>%
+  dt_setup(n_rows = 8)
+```
+</div>
+<div class = "col-md-1"></div>
+<div class = "col-md-7">
+<br><br>
+This table show the number of times that a gene name appears in the genome annotated 
+as a distinct gene. <br>
+There are lots of duplicate gene names so we'll use the Ensembl gene IDs for the 
+initial processing. <br> 
+The gene set files that we use for the GO analysis do not contain Ensembl IDs so
+we'll have to convert back to gene name at the point when we run the GO analysis.
+<br><br>
+<font size ="1">The highly duplicated gene names probably aren't in the GO 
+annotations much but it'd be worth checking.</font>
+<br><br>
+</div>
+</div>
+```{r dup_Ensembl_IDs}
+duplicated_Ensembl_IDs <- genfo %>%
+                            count(gene_id) %>%
+                            filter(n > 1) %>%
+                            count() %>%
+                            pull()
+```
+
+There are `r duplicated_Ensembl_IDs` duplicate Ensembl IDs so we'll use these for 
+filtering and convert back to gene name at the end of this analysis. 
+<br><br>
+
+## Number of transcripts per gene
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+genfo <- genfo %>%
+    select(gene_id, gene_name, no_of_transcripts) %>%
+    arrange(desc(no_of_transcripts))
+
+dt_setup(genfo)
+```
+</div>
+<div class = "col-md-1">
+</div>
+<div class = "col-md-5">
+```{r}
+genfo_with_percentages <- genfo %>%
+    count(no_of_transcripts) %>%
+    mutate(percentage = ceiling(n/nrow(genfo) *100))
+    
+dt_setup(genfo_with_percentages)  
+```
+</div>
+</div>
+
+```{r, fig.width = 12, fig.height = 6}
+# the bins have been customised manually
+bins <- c(1:24, 26, 28, 30, 35, 40, 50, 60, 80, 250)
+
+transcript_counts <- genfo %>%
+    mutate(bin_cat = cut(genfo$no_of_transcripts, breaks = bins)) %>%
+    filter(no_of_transcripts > 1) %>%
+    count(bin_cat)
+
+# rename the first sets that have binwidth of 1
+plot_labels <- as.vector(transcript_counts$bin_cat)
+plot_labels[1:23] <- 2:24
+
+transcript_counts %>%
+    ggplot(aes(x = bin_cat, y = n)) + 
+    geom_col(fill = "#3cc1f2", color = "#374772") +
+    scale_x_discrete(labels = plot_labels) +
+    theme(axis.text.x = element_text(angle = 45, size = 8)) +
+    ggtitle("Number of transcripts of all genes in the human genome")
+```
+<br>
+
+## Thresholds  
+
+```{r calculate_thresholds}
+thresholds <- genfo %>%
+    pull(no_of_transcripts) %>%
+    quantile(probs = c(0.9, 0.95, 0.99))
+
+thresholds <- tibble::enframe(thresholds, 
+                              name  = "threshold", 
+                              value = "transcript_threshold")
+
+thresholds <- thresholds %>%
+    mutate(category = c("high", "very_high", "very_very_high")) %>%
+    mutate(no_of_genes = sapply(
+      thresholds$transcript_threshold, function(x) {
+        sum(genfo$no_of_transcripts >= x)
+      })
+    )
+```
+<div class = "row">
+<div class = "col-md-7">
+```{r}
+dt_setup(thresholds)
+```
+</div>
+<div class = "col-md-1">
+</div>
+<div class = "col-md-4">
+<br>
+<br>
+Thresholds based on the distribution of the data at 90th, 95th and 99th percentiles.
+</div>
+</div>
+
+```{r}
+genfo %>%
+    ggplot(aes(x = no_of_transcripts)) +
+    geom_density(size = 1, adjust = 3, color = "#374772") +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, 0.075)) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, 40)) +
+    ggtitle("Number of transcripts of all genes in the human genome") +
+    geom_vline(data = thresholds, 
+               aes(xintercept = transcript_threshold), 
+               color    = "#3cc1f2", 
+               linetype = "dashed",
+               size     = 1)
+```
+
+<div class = "row">
+<div class = "col-md-8">
+```{r}
+dt_setup(thresholds)
+```
+
+</div>
+<div class = "col-md-4">
+</div>
+</div>
+
+
+## Generating the biased gene sets and running the GO analysis
+
+<br>
+1. Randomly select 200 genes from the subset of genes with high/very high/very very high numbers of transcripts.
+<br><br>
+2. Run functional enrichment analysis, record results.
+<br><br>
+3. Repeat steps 1 and 2 100 times.
+<br><br>
+Repeat this for each transcript category.
+
+
+```{r helper_functions}
+get_threshold <- function(category_name){
+     filter(thresholds, category == category_name) %>%
+        pull(transcript_threshold)
+}
+
+get_random_sample_for_category <- function(category) {
+    
+    filtered <- filter(genfo, no_of_transcripts >= get_threshold(category))
+    
+    filtered  %>%
+        sample_n(size = 200) %>%
+        pull(gene_name)
+}       
+```
+
+
+```{r GO_analysis, eval = FALSE}
+# This code is run once to get the GO analysis results- it takes a while to run
+# it 100 times for each bias category.
+
+# There are some duplicate gene names - MATR3 has 11 transcripts and 28 transcripts, TBCE has 19 and 57.
+# Maybe this doesn't matter here, we're seeing what comes up when selecting genes with high transcripts. 
+
+load("../data/all_go_categories_human.rda")
+load("../data/all_background_genes_human.rda")
+
+# set up the summary files so we can populate them as we get the GO analysis results
+go_category_counts <- tibble(GO_category = names(all_go_categories_human))
+
+summary_stats <- tibble(
+                      run_number         = rep(1:100, times = 3), 
+                      bias_category      = rep(thresholds$category, each = 100), 
+                      sig_number_results = 0)
+
+summary_stats$sig_number_results %<>% as.integer
+
+
+# more efficient to pass this as an argument than having to calculate it each time
+# the overrep test is run
+unique_genes_in_categories <- unique(as.vector(unlist(all_go_categories_human)))
+
+for (i in 1:length(thresholds$category)){
+    
+    bias_category <- thresholds$category[i]
+   
+    go_category_counts <- mutate(go_category_counts, occurrences = 0)
+
+    for(j in 1:100) {
+
+        genes <- get_random_sample_for_category(bias_category)
+        
+        go_results <- overrep_test(all_go_categories_human, 
+                                   query_genes = genes, 
+                                   all_background_genes_human, 
+                                   unique_genes_in_categories = unique_genes_in_categories,
+                                   min_genes_in_category = 1, 
+                                   max_genes_in_category = 500000)
+        
+        if(length(go_results) > 0){
+           
+            summary_stats <- summary_stats %>%
+                mutate(sig_number_results = if_else(
+                    bias_category == !!bias_category & run_number == j, 
+                    nrow(go_results), 
+                    sig_number_results
+                ))
+        }  
+        go_category_counts <- go_category_counts %>%
+            mutate(occurrences = if_else(GO_category %in% rownames(go_results), 
+                                         occurrences + 1, 
+                                         occurrences)
+                   ) 
+    }
+
+    # I couldn't get tidyverse to work properly with mutating column names and adding to them, so we'll rename afterwards
+    go_category_counts <- rename(go_category_counts, !!bias_category := occurrences)
+
+}
+
+human_transcript_biased  <- go_category_counts
+human_transcript_summary <- summary_stats
+
+usethis::use_data(human_transcript_biased, overwrite = TRUE)
+usethis::use_data(human_transcript_summary, overwrite = TRUE)
+```
+
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+load("../data/human_transcript_biased.rda")
+load("../data/human_transcript_summary.rda")
+
+category_counts <- human_transcript_summary %>%
+    filter(sig_number_results > 0) %>%
+    group_by(bias_category) %>%
+    count(bias_category)
+
+dt_setup(category_counts)
+```
+</div>
+<div class = "col-md-6">
+<br><br>
+The table shows the number of functional enrichment analyses that returned 1 or 
+more significantly enriched categories from the 100 that were run. 
+</div> 
+</div>
+</div> 
+<br>
+<div class = "row">
+<div class = "col-md-6">
+```{r fig.height = 4, fig.width = 4}
+human_transcript_summary %>%
+    ggplot(aes(x = bias_category, y = sig_number_results)) +
+    geom_violin(fill = light_b_blue, colour = dark_b_blue, lwd = 0.8) +
+    xlab("") +
+    ylab("number of categories") +
+    theme_bw() +
+    theme(axis.text.x = element_text(size = 12)) +
+    geom_label(data = category_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:3, y = 410)) #+
+ # geom_boxplot(width = 0.005)
+```
+</div> 
+<div class = "col-md-6">
+<br><br>
+The violin plot shows the number of significant categories per gene list 
+returned from the GO analysis. 
+</div>
+</div>
+
+## Identified categories
+
+The number of times that a functional category was identified from the 100 times
+that the analysis was run for each bias category.
+The table contains every functional category that appeared once or more in any 
+of the bias categories.
+
+```{r}
+#all_identified_categories <- human_transcript_biased  %>%
+#    filter(high > 0 | very_high > 0 | very_very_high > 0) %>%
+#    arrange(desc(very_very_high))
+
+all_identified_categories <- human_transcript_biased %>%
+  filter_at(vars(-GO_category), any_vars(. > 0)) %>%
+  arrange(desc(very_very_high))
+
+dt_setup(all_identified_categories)  
+```
+
+In total, `r nrow(all_identified_categories)` functional categories appeared 
+at least once.
+
+
+## Filter Categories
+
+We don't want categories that only appeared a handful of times so we'll use an 
+arbitrary value of `r min_appearances` as a threshold.
+
+```{r}
+get_freq_categories <- function(transcript_category, return_vector = FALSE, return_just_categories = TRUE){
+  transcript_category <- as.symbol(transcript_category)
+  
+  res <- human_transcript_biased  %>%
+    select(GO_category, !!transcript_category) %>%
+    filter(!!transcript_category >= min_appearances) %>%
+    arrange(desc(!!transcript_category))
+
+  if(return_just_categories) return (res$GO_category)
+  
+  if(return_vector) return (tibble::deframe(res))
+  res
+}
+
+suspects <- list(
+  "high"           = get_freq_categories("high"),
+  "very_high"      = get_freq_categories("very_high"),
+  "very_very_high" = get_freq_categories("very_very_high")
+)
+```
+
+```{r}
+suspects_for_violin <- human_transcript_biased %>%
+  tidyr::gather(-GO_category, key = "bias_category", value = "occurrences") %>%
+  #tidyr::gather(`high`, `very_high`, `very_very_high`, key = "bias_category", value = "occurrences") %>%
+  filter(occurrences > min_appearances)
+```
+
+## GO category occurrences
+```{r, eval = FALSE}
+suspects <- list(
+  "high"           = get_freq_categories("high"),
+  "very_high"      = get_freq_categories("very_high"),
+  "very_very_high" = get_freq_categories("very_very_high")
+)
+
+beanplot(
+  suspects, 
+  what   = c(0,1,0,1), 
+  col    = c("#1B9E77","#06086d"), 
+  ll     = 0.03, 
+  method = "jitter", 
+  border = "#06086d",
+  las    = 1,
+  log    = "",
+  ylim   = c(10, 120),
+  main   = paste0("GO category appearances (>", min_appearances, ")"),
+  ylab   = "no of times GO category appeared"
+)
+
+text(1:length(suspects), 
+     y   = 115, 
+     cex = 0.8, 
+     labels = paste0("n = ", sapply(suspects, length))
+     )
+```
+
+```{r fig.height = 4, fig.width = 4}
+total_counts <- suspects_for_violin %>%
+  count(bias_category)
+
+suspects_for_violin  %>%
+    ggplot(aes(x = bias_category, y = occurrences)) +
+    geom_violin(fill = light_b_blue, colour = dark_b_blue, lwd = 0.8) +
+    xlab("") +
+    ylab("number of times category was identified") +
+    theme_bw() +
+    theme(axis.text.x = element_text(size = 12)) +
+   # geom_boxplot(width = 0.1) 
+    geom_dotplot(binaxis='y', stackdir='center', dotsize=0.2, colour = dark_b_blue) +
+    geom_label(data = total_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:3, y = 100)) #+
+ # 
+```
+
+## Deduplicate terms
+
+```{r}
+dups <- suspects_for_violin %>%
+  select(-occurrences) %>%
+  count(GO_category) %>%
+  filter(n > 1) %>%
+  count(n)
+```
+There are `r filter(dups, n ==3) %>% pull(nn)` functional categories that were 
+identified in all 3 transcript categories and `r filter(dups, n == 2) %>% pull(nn)`
+functional categories identified in 2 transcript categories.
+The duplicate terms will be removed from the more stringent categories.
+
+```{r deduplicate}
+high_set <- suspects_for_violin %>%
+  filter(bias_category == "high") %>%
+  pull(GO_category)
+
+very_high_set <- suspects_for_violin %>%
+  filter(bias_category == "very_high") %>%
+  pull(GO_category)
+very_high_set <- very_high_set[!very_high_set %in% high_set]
+
+vv_high_set <- suspects_for_violin %>%
+  filter(bias_category == "very_very_high") %>%
+  pull(GO_category)
+vv_high_set <- vv_high_set[!vv_high_set %in% c(high_set, very_high_set)]
+
+suspects <- list(
+   "high_transcripts"      = high_set,
+   "very_high_transcripts" = very_high_set, 
+   "vv_high_transcripts"   = vv_high_set
+)
+
+
+```
+
+```{r} 
+#eval=FALSE, echo = FALSE}
+# write out file with unix line endings
+for (i in 1:length(suspects)) {
+  
+  filename <- paste0("../data/", names(suspects)[i], ".txt")
+  output_file <- file(filename, "wb")
+  
+  write.table(file = output_file, 
+              x = suspects[[i]], 
+              row.names = FALSE,
+              col.names = FALSE, 
+              quote = FALSE)
+  
+  close(output_file)
+}
+```
+
+
+```{r}
+#We don't get as many results here, compared to mouse.
+#Is human better curated? It would be interesting to see how many annotations human genes have compared to mouse. 
+
+#Total number of functional categories tested = `r nrow(human_transcript_biased)`
+```
+
+
+
+
+
