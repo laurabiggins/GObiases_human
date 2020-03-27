@@ -2,3 +2,6 @@
 .Rhistory
 .RData
 .Ruserdata
+data-raw/head.gtf
+data-raw/gene_info_head.txt
+man/closest_genes.txt

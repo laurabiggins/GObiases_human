@@ -1,48 +1,41 @@
-# script to generate random positions and find the closest gene
-# the only input file required is a gtf file - this should contain all the genes and their locations in the genome 
-# py ./generate_genelist_from_random_positions.py --output gene_lists_GRCm38.95/closest_genes1.txt
-
 import random
 from collections import defaultdict
-
-#import getopt
-#import sys
+#import pandas
 
 # default output filename if one is not supplied
 output_filename = "closest_genes.txt"
 # number of genes to generate per chromosome
 total_number_of_genes = 200
 # file with lengths of chromosomes
-chr_list = "chr_list_noMT.txt"
-gtf_file = "/bi/home/bigginsl/useful_files/Mus_musculus.GRCm38.95.gtf"
+chr_list = "D:/GObiases_human/data-raw/chr_list_noMT_HS.txt"
+#gtf_file = "D:/GObiases_human/data-raw/Homo_sapiens.GRCh38.98_gene_info.txt"
+#gtf_file = "D:/GObiases_human/data-raw/gene_info_head.txt"
+gtf_file = "D:/Homo_sapiens.GRCh38.99.gtf"
+#gtf_file = "D:/GObiases_human/data-raw/head.gtf"
 biotype = "any"
 
 total_number_of_genes = int(total_number_of_genes)
   
 # dictionary of random positions, keys are chr, values are lists of positions
 random_positions = {}
+#genome_sizes = pandas.read_csv("D:/GObiases_human/data-raw/chr_list_noMT.csv", header=None, names = ("chr", "length"))
 
-try:
-    with open(chr_list) as f:
-        genome_sizes = f.readlines()
-except IOError as e:
-    print "I/O error({0}): {1}".format(e.errno, e.strerror)
-    print "Could not open chromosome sizes file"
-    raise
-except:
-    print "Unexpected error:", sys.exc_info()[0]
-    raise
+with open(chr_list) as f:
+    genome_sizes = f.readlines()
 
 # make this a float so that we can do float maths to determine how many genes to generate per chr
 total_genome_size = float(0)
 
 for line in genome_sizes:
-
     row = line.split("\t")
-    
     # add the chr_length
     chr_length = int(row[1])
     total_genome_size += chr_length
+    print(f'the length of chr {row[0]} is {chr_length:,}')
+
+
+# total = f'Amount including tax is £{pounds + (tax_rate*0.01*pounds):,}'
+print(f'Total genome size = {total_genome_size:,}')    
 
 
 # we want the total number of genes to be approximately the number of genes specified, 
@@ -84,8 +77,7 @@ with open(gtf_file) as f:
 # include the distance from the between the random position and the gene
 # keys are chr, values are gene info
 gene_info = defaultdict(list)
-    
-    
+       
 for line in gtf_file:
     
     line = line.rstrip()
@@ -119,6 +111,7 @@ for line in gtf_file:
                     gene_name = details[2].replace("gene_name ", "")
                     gene_name = gene_name.replace('"', "")
                     gene_name = gene_name.replace(' ', "")
+                    #print(f'gene name = {gene_name}')
                 else:
                     print("gene name not found in gtf file")
                    
@@ -127,6 +120,8 @@ for line in gtf_file:
                 # in the gtf column 0 is chr, 3 is start, 4 is end
                 chr = split_line[0]
                 info = [gene_id, gene_name,chr,int(split_line[3]),int(split_line[4]),gene_biotype]
+                
+                #print(f'Info for chr{chr} is {info}') 
                 
                 gene_info[chr].append(info) 
                 
@@ -141,7 +136,8 @@ for chr in random_positions:
     for random_pos in random_positions[chr]:
     
         closest_pos = 1000000000
-        closest_gene = ""      
+        closest_gene = [] # this is a list so that it can contain the gene, the position of the gene and
+        # the random position
         
         for gene in gene_info[chr]:
 
@@ -177,3 +173,4 @@ with open(output_filename, "w") as f:
     f.write(header_line)
     f.write("\n")
     f.write("\n".join(["\t".join([str(g) for g in closest_gene]) for closest_gene in closest_genes]))
+
