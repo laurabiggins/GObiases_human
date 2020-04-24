@@ -1,0 +1,104 @@
+---
+title: "Human GC content"
+author: "Laura Biggins"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message = FALSE, warning = FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+display_code <- FALSE
+knitr::opts_knit$set(global.par = TRUE, width=75)
+knitr::opts_chunk$set(
+                echo    = display_code,
+                prompt  = FALSE,
+                tidy    = TRUE,
+                comment = NA,
+                message = FALSE,
+                warning = FALSE)
+                #cache=TRUE)
+
+library(rmdformats)
+library(runGOA)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(beanplot)
+library(reticulate)
+palette(brewer.pal(6, "Set2"))
+
+par(mgp = c(2, 0.5, 0))
+par(mar = par()$mar * 0.7)
+#load_all()
+min_appearances <- 20
+```
+
+```{r DT_function, eval = TRUE}
+dt_setup <-  function(data, n_rows = 10, lineHeight="80%") {
+  DT::datatable(data,
+                rownames = FALSE,
+                options = list(dom = 't', 
+                              pageLength = n_rows)
+  ) %>%
+  DT::formatStyle(0, target = 'row', lineHeight = lineHeight)
+}
+
+dark_b_blue <- "#374772" 
+light_b_blue <- "#3cc1f2"
+```
+
+
+```{python, eval = TRUE}
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.array([1,2,3])
+
+y = np.square(x)
+
+print(x[1])
+```
+
+Now we'll try running the script
+```{python, eval = TRUE}
+source_python("python/simple_python_script.py")
+```
+
+```{r}
+py$x
+```
+
+
+### Generate lists of human genes biased by the number of GCs for the genes.
+
+Use a gene info file derived from a gtf file from Ensembl containing all the genes
+and GCs in the human genome.
+
+```{r import_genfo_file, eval = TRUE}
+# The gene info file contains the number of GCs of all the genes in the human genome. 
+# The processing of it is described in the processing_gtf file.
+load("../data/genfo.rda")
+load("../data/all_go_categories_human.rda")
+
+all_GO_annotated_genes <- unique(as.vector(unlist(all_go_categories_human)))
+
+genfo_all_genes <- genfo
+
+genfo <- genfo %>%
+    filter(gene_name %in% all_GO_annotated_genes)
+
+```
+
+The python script generate_genelist_from_random_positions.py produces a list of 200 genes. It generates a number of random positions along each chromosome. The number of positions generated is proportional to the length of the chromosome. The chromosome lengths are taken from a separate file (chr_list.txt) A gtf file containing all the genes in the genome is required. Each line from the gtf file is parsed and all the genes are stored by chromosome. Each random position is looped through to find the closest (or overlapping) gene and the output is written to a new file. This script has been run to create lists of genes for the mouse genome using the gtf file for genome version GRCm38.95
+
+```for i in {1..2}; do sbatch -cwd --mem 10G python ./generate_genelist_from_random_positions.py --output gene_lists_GRCm38.95/closest_genes_${i}.txt; done```
+
+Extract the gene names and remove header for i in closest*; do cut -f2 $i | tail -n 200 > ${i%".txt"}_just_genes.txt; done
+
+

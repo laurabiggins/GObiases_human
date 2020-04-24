@@ -1,5 +1,5 @@
 ---
-title: "Human GC content"
+title: "Human closest gene"
 author: "Laura Biggins"
 date: "`r Sys.Date()`"
 output:
@@ -21,6 +21,7 @@ knitr::opts_chunk$set(
                 comment = NA,
                 message = FALSE,
                 warning = FALSE)
+                #eval    = FALSE)
                 #cache=TRUE)
 
 library(rmdformats)
@@ -30,7 +31,7 @@ library(dplyr)
 library(ggplot2)
 library(RColorBrewer)
 library(beanplot)
-library(reticulate)
+library(plotly)
 palette(brewer.pal(6, "Set2"))
 
 par(mgp = c(2, 0.5, 0))
@@ -54,43 +55,321 @@ light_b_blue <- "#3cc1f2"
 ```
 
 
-```{python, eval = TRUE}
-import matplotlib.pyplot as plt
-import numpy as np
+```{r}
+#library("devtools")
+#load_all()
 
-x = np.array([1,2,3])
+library(RColorBrewer)
+palette(brewer.pal(6, "Set2"))
 
-y = np.square(x)
+library(tidyverse)
+library(skimr)
+library(DT)
 
-print(x[1])
+par(mgp = c(2, 0.5, 0))
+par(mar = par()$mar * 0.7)
+
+genome <- "Homo_sapiens.GRCh38.99.gtf"
 ```
 
-Now we'll try running the script
-```{python, eval = TRUE}
-source_python("python/simple_python_script.py")
+# Closest gene
+
+Some analyses performed on sequencing data use genes as the basis for analysis.
+In RNA-seq for example, a table of count data is often produced where a value 
+for a gene is calculated by counting reads that fall within or overlap the gene. 
+Some analyses are not directly based around genes. A common method used in ChIP-seq 
+analysis is peak calling, where a test sample is generally compared to a background 
+sample to identify regions that have a high read count in the test sample. 
+These peaks may be exonic or intronic and can simply be annotated with the overlapping gene.
+The peaks may also be intergenic in which case they are often annotated with the closest gene. 
+
+[insert picture/diagram of exonic, intronic and intergenic peaks]
+                      
+Genes vary greatly in size and the spread of genes is not uniform across chromosomes. 
+It may be expected that longer genes, genes in the middle of gene deserts and 
+those at the ends of clusters of genes are identified more frequently when annotating 
+data with the closest gene to a region of interest.                      
+                   
+The aim of this study was to see whether any biases were found when annotating 
+random positions within the genome with the closest gene.
+This was carried out using the following steps:                  
+                  
+* generating random locations within the mouse genome and annotating these with the closest gene
+* seeing whether any particular genes were overrepresented
+* performing GO analyses on the lists of closest genes
+
+
+## Generating genes by random position
+  
+The python script `generate_genelist_from_random_positions.py` produces a list of 200 genes.
+It generates a number of random positions along each chromosome. 
+The number of positions generated is proportional to the length of the chromosome. 
+The chromosome lengths are taken from a separate file (`chr_list.txt`)
+A gtf file containing all the genes in the genome is required. Each line from the 
+gtf file is parsed and all the genes are stored by chromosome.
+Each random position is looped through to find the closest (or overlapping) gene 
+and the output is written to a new file.
+This script has been run to create lists of genes for the mouse genome using the 
+gtf file for genome version GRCm38.95
+
+`for i in {1..200}; do sbatch --mem 10G ./random_pos_wrapper.sh $i; done`
+
+The files produced have quite a bit of information (gene_id gene_name       chromosome      start   end     biotype distance        random_pos)
+
+For now, we want to extract the gene names and remove header
+`for i in closest*; do cut -f2 $i | tail -n 200 > ${i%".txt"}_just_genes.txt; done`
+
+
+```{r, eval = FALSE, echo = FALSE}
+# Import and process the sets of genes. This shouldn't need doing again unless the lists are re-generated
+
+files <- list.files(path = "../data-raw/closest_genes/", pattern = ".txt", full.names = TRUE)
+closest_gene_lists <- lapply(files, function(x) scan(x, what = "character"))
+save(closest_gene_lists, file = "../data/closest_gene_lists.rda")
 ```
 
 ```{r}
-py$x
+#genfo_file_name <- paste0("../data/", genome, "_gene_info.txt")
+#genfo <- read.delim(genfo_file_name)
+#bg_genes <- as.vector(unique(genfo$gene_name))
+
 ```
 
+### Checking for overrepresentation at the gene level
 
-### Generate lists of human genes biased by the number of GCs for the genes.
+There are 200 sets of 200 genes. We can plot out which genes appear the most often
+in the 200 sets. The top hit, Gm20388, appears 69 times in mouse.
+(Does each gene only appear once per list? I don't think I filter on that.)
 
-Use a gene info file derived from a gtf file from Ensembl containing all the genes
-and GCs in the human genome.
+In human, first gene is not really relevant as, in contrast to mouse, 
+most chromosomes have a gene quite near the start.
+What might be useful is to label genes closest to the centromeric regions, though I 
+don't think that this is worth doing across all the chromosomes as some gene-less centromere
+regions are quite small
 
-```{r import_genfo_file, eval = TRUE}
-# The gene info file contains the number of GCs of all the genes in the human genome. 
-# The processing of it is described in the processing_gtf file.
+
+```{r}
 load("../data/genfo.rda")
-load("../data/all_go_categories_human.rda")
+load("../data/all_background_genes_human.rda")
+load("../data/closest_gene_lists.rda")
+bg_genes <- all_background_genes_human
+all_genes <- unlist(closest_gene_lists)
 
-all_GO_annotated_genes <- unique(as.vector(unlist(all_go_categories_human)))
+tabled_genes <- table(all_genes)
+tabled_genes <- tabled_genes[order(tabled_genes, decreasing = TRUE)]
+gene_counts  <- data.frame(gene_name = names(tabled_genes), n = as.vector(tabled_genes))
 
-genfo_all_genes <- genfo
+gene_counts %>%
+  head(n = 30) %>%
+  ggplot(aes(x = fct_reorder(gene_name, n), y = n)) + 
+  geom_col() + 
+  coord_flip() +
+  labs(x = "gene")
+```
 
-genfo <- genfo %>%
-    filter(gene_name %in% all_GO_annotated_genes)
+```{r}
+x <- split(genfo, f = genfo$chromosome)
+y <- lapply(x, head, n = 1)
+first_genes <- sapply(y, "[", "gene_name")
+first_genes_vec <- as.vector(unlist(first_genes))
+
+gene_counts$first_genes <- "no"
+
+gene_counts$first_genes[gene_counts$gene_name %in% first_genes_vec] <- "yes"
+
+# add gene lengths or genes longer than 1mb
+gene_counts <- genfo %>%
+  filter(gene_name %in% gene_counts$gene_name) %>%
+  dplyr::select(gene_name, length) %>%
+  right_join(gene_counts) %>%
+  mutate(longer_than_1mb = length > 1000000)
+```
+
+```{r}
+gene_counts <- gene_counts %>%
+  mutate(gene_characteristics = ifelse(first_genes == "yes", "first_gene", NA)) 
+
+# cringy code but it wasn't working the other ways I tried
+gene_counts$gene_characteristics[gene_counts$longer_than_1mb] <- "long_gene"
+gene_counts$gene_characteristics[gene_counts$first_genes == "yes" && gene_counts$longer_than_1mb] <- "first and long"
+
+datatable(gene_counts)
+
+gene_counts %>%
+  head(n = 30) %>%
+  ggplot(aes(x = fct_reorder(gene_name, n), y = n, fill = gene_characteristics)) + 
+  geom_col() + 
+  coord_flip() +
+  labs(x = "gene")
+```
+
+There are a few genes without lengths - presumably these were not found in the genfo file - though the genfo file should contain 
+the same genes as the gtf that these gene lists were derived from (with minor differences in genome version - maybe the genfo file should be reprocessed)
+```{r}
+sum(gene_counts$gene_name %in% genfo$gene_name)
+sum(!gene_counts$gene_name %in% genfo$gene_name)
+```
+I'll carry on for now - but this should be checked out.
+
+
+### Plot number of times a gene appeared vs its length
+```{r}
+genfo$occurrences <- as.vector(tabled_genes[match(genfo$gene_name, names(tabled_genes))])
+genfo$occurrences[is.na(genfo$occurrences)] <- 0
+
+genfo$first_genes <- "no"
+
+genfo$first_genes[genfo$gene_name %in% first_genes_vec] <- "yes"
+
+p <- ggplot(genfo, aes(x = occurrences, y = log2(length), color = first_genes)) +
+  geom_point()#size = 0.9)
+
+ggplotly(p)
+```
+
+
+```{r density_plot}  
+library(MASS)
+library(ggplot2)
+library(viridis)
+get_density <- function(x, y, ...) {
+  dens <- MASS::kde2d(x, y, ...)
+  ix <- findInterval(x, dens$x)
+  iy <- findInterval(y, dens$y)
+  ii <- cbind(ix, iy)
+  return(dens$z[ii])
+}
+
+density_values <- get_density(genfo$occurrences, log2(genfo$length), n = 75)
+ggplot(genfo) +
+  geom_point(aes(x = occurrences, y = log2(length), color = density_values)) +
+  scale_colour_viridis()
+```
+
+```{r, eval = FALSE}
+p <- genfo %>%
+  subset(occurrences > 5) %>%
+  ggplot() + geom_point(aes(x = occurrences, y = log2(length), color = first_genes, text = gene_name))
+
+ggplotly(p)
+p  
+```
+
+Genes on the y chromosomes mess this up a bit
+
+
+## Gene ontology analysis
+
+```{r overrep, eval = FALSE}
+load("../data/closest_gene_lists.rda")
+load(".../data/all_go_categories_human.rda")
+closest <- closest_gene_lists
+go_results1 <- overrep_test(all_go_categories_human, closest[[1]], bg_genes)
+go_results1
+
+closest_gene_results <- lapply(closest, function(query){
+  overrep_test(all_go_categories_human, query, bg_genes)#, pval_threshold = 0.2)
+})
+
+save(closest_gene_results, file = "../data/closest_gene.rda")
+```
+
+```{r}
+load("../data/closest_gene.rda")
+
+nulls_removed <- closest_gene_results[lapply(closest_gene_results,length) != 0]
+number_of_results <- vapply(nulls_removed, nrow, FUN.VALUE = numeric(1))
+```
+
+Each of the 200 sets of genes was run through a gene ontology analysis  
+
+The number of gene sets that returned significant results from the GO 
+overrepresentation analysis 
+
+```{r}
+all_sig_categories <- unlist(sapply(nulls_removed, rownames))
+tabled_categories  <- table(all_sig_categories)
+ordered_categories <- tabled_categories[order(tabled_categories, decreasing = TRUE)]
+```
+
+In this set, we had 200 sets of gene lists, while in the others we had 100 per category.
+The threshold in the mouse data was therefore doubled.
+If we do this for human, we don't get any results, so I'm reducing the threshold to 10.
+I think that the cutoffs for mouse are probably too stringent, it was just that I 
+was getting so many results that I set the stringency quite high.
+
+```{r}
+min_appearances <- 10
+```
+
+```{r filter}
+filtered_categories <- ordered_categories[ordered_categories >= min_appearances]
+filtered_categories_vec <- as.vector(filtered_categories)
+names(filtered_categories_vec) <- names(filtered_categories)
+```
+
+```{r}
+par(mfrow = c(1,2))
+
+beanplot(
+  number_of_results, 
+  what   = c(0,1,0,1), 
+  col    = c("#1B9E77","#06086d"), 
+  ll     = 0.03, 
+  method = "jitter", 
+  border = "#06086d",
+  las    = 1,
+  main   = "no of results per gene list"
+)
+
+boxplot(filtered_categories_vec,
+        main = paste0("GO category appearances (>", min_appearances, ")"),
+        ylab = "no of times GO category appeared",
+        pch  = 16,
+        cex  = 0.5,
+        col  = "#1B9E77",
+        las = 1,
+        cex.axis = 0.8
+        )
 
 ```
+Each line on the beanplot shows the number of significant (corrected p-value < 0.05) functional categories returned from gene ontology analysis.
+
+```{r }
+suspects <- names(ordered_categories[ordered_categories >= min_appearances])
+```
+
+
+```{r, eval = FALSE}
+filename <- "../data/closest_genes.txt"
+  
+output_file <- file(filename, "wb")
+
+write.table(
+  file      = output_file,
+  x         = suspects, 
+  row.names = FALSE,
+  col.names = FALSE, 
+  quote     = FALSE
+)
+
+close(output_file)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
