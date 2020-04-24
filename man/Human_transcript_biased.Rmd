@@ -192,8 +192,8 @@ Thresholds based on the distribution of the data at 90th, 95th and 99th percenti
 genfo %>%
     ggplot(aes(x = no_of_transcripts)) +
     geom_density(size = 1, adjust = 3, color = "#374772") +
-    scale_y_continuous(expand = c(0, 0), limits = c(0, 0.075)) +
-    scale_x_continuous(expand = c(0, 0), limits = c(0, 40)) +
+    scale_y_continuous(expand = c(0, 0), limits = c(0, 0.08)) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, 50)) +
     ggtitle("Number of transcripts of all genes in the human genome") +
     geom_vline(data = thresholds, 
                aes(xintercept = transcript_threshold), 
@@ -250,14 +250,14 @@ get_random_sample_for_category <- function(category) {
 # There are some duplicate gene names - MATR3 has 11 transcripts and 28 transcripts, TBCE has 19 and 57.
 # Maybe this doesn't matter here, we're seeing what comes up when selecting genes with high transcripts. 
 
-load("../data/all_go_categories_human.rda")
+#load("../data/all_go_categories_human.rda")
 load("../data/all_background_genes_human.rda")
 
 # set up the summary files so we can populate them as we get the GO analysis results
 go_category_counts <- tibble(GO_category = names(all_go_categories_human))
 
 summary_stats <- tibble(
-                      run_number         = rep(1:100, times = 3), 
+                      run_number         = rep(1:100, times = 2), 
                       bias_category      = rep(thresholds$category, each = 100), 
                       sig_number_results = 0)
 
@@ -268,7 +268,14 @@ summary_stats$sig_number_results %<>% as.integer
 # the overrep test is run
 unique_genes_in_categories <- unique(as.vector(unlist(all_go_categories_human)))
 
-for (i in 1:length(thresholds$category)){
+#for (i in 1:length(thresholds$category)){
+#the very_very high category only has 183 genes so there's no point in randomly sampling
+#that for 200 genes, 100 times. 
+#
+#
+#!! This needs simplifying - there's too much in here to go wrong - latest was
+#Error: Names must be unique. 
+for (i in 1:2){  
     
     bias_category <- thresholds$category[i]
    
@@ -303,7 +310,6 @@ for (i in 1:length(thresholds$category)){
 
     # I couldn't get tidyverse to work properly with mutating column names and adding to them, so we'll rename afterwards
     go_category_counts <- rename(go_category_counts, !!bias_category := occurrences)
-
 }
 
 human_transcript_biased  <- go_category_counts
@@ -339,6 +345,13 @@ more significantly enriched categories from the 100 that were run.
 <div class = "row">
 <div class = "col-md-6">
 ```{r fig.height = 4, fig.width = 4}
+no_categories <- human_transcript_summary %>% 
+  select(bias_category) %>% 
+  unique() %>% 
+  count() %>% 
+  pull()
+
+# change x =1:3 to the number of categories that I'm actually using (2)
 human_transcript_summary %>%
     ggplot(aes(x = bias_category, y = sig_number_results)) +
     geom_violin(fill = light_b_blue, colour = dark_b_blue, lwd = 0.8) +
@@ -346,7 +359,7 @@ human_transcript_summary %>%
     ylab("number of categories") +
     theme_bw() +
     theme(axis.text.x = element_text(size = 12)) +
-    geom_label(data = category_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:3, y = 410)) #+
+    geom_label(data = category_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:no_categories, y = 410)) #+
  # geom_boxplot(width = 0.005)
 ```
 </div> 
@@ -371,7 +384,7 @@ of the bias categories.
 
 all_identified_categories <- human_transcript_biased %>%
   filter_at(vars(-GO_category), any_vars(. > 0)) %>%
-  arrange(desc(very_very_high))
+  arrange(desc(very_high))
 
 dt_setup(all_identified_categories)  
 ```
@@ -402,8 +415,8 @@ get_freq_categories <- function(transcript_category, return_vector = FALSE, retu
 
 suspects <- list(
   "high"           = get_freq_categories("high"),
-  "very_high"      = get_freq_categories("very_high"),
-  "very_very_high" = get_freq_categories("very_very_high")
+  "very_high"      = get_freq_categories("very_high")#,
+ # "very_very_high" = get_freq_categories("very_very_high")
 )
 ```
 
@@ -418,8 +431,8 @@ suspects_for_violin <- human_transcript_biased %>%
 ```{r, eval = FALSE}
 suspects <- list(
   "high"           = get_freq_categories("high"),
-  "very_high"      = get_freq_categories("very_high"),
-  "very_very_high" = get_freq_categories("very_very_high")
+  "very_high"      = get_freq_categories("very_high")
+ # "very_very_high" = get_freq_categories("very_very_high")
 )
 
 beanplot(
@@ -456,7 +469,7 @@ suspects_for_violin  %>%
     theme(axis.text.x = element_text(size = 12)) +
    # geom_boxplot(width = 0.1) 
     geom_dotplot(binaxis='y', stackdir='center', dotsize=0.2, colour = dark_b_blue) +
-    geom_label(data = total_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:3, y = 100)) #+
+    geom_label(data = total_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x =1:no_categories, y = 100)) #+
  # 
 ```
 
@@ -469,8 +482,8 @@ dups <- suspects_for_violin %>%
   filter(n > 1) %>%
   count(n)
 ```
-There are `r filter(dups, n ==3) %>% pull(nn)` functional categories that were 
-identified in all 3 transcript categories and `r filter(dups, n == 2) %>% pull(nn)`
+There are `r filter(dups, n ==2) %>% pull(nn)` functional categories that were 
+identified in both transcript categories and `r filter(dups, n == 2) %>% pull(nn)`
 functional categories identified in 2 transcript categories.
 The duplicate terms will be removed from the more stringent categories.
 
@@ -484,17 +497,16 @@ very_high_set <- suspects_for_violin %>%
   pull(GO_category)
 very_high_set <- very_high_set[!very_high_set %in% high_set]
 
-vv_high_set <- suspects_for_violin %>%
-  filter(bias_category == "very_very_high") %>%
-  pull(GO_category)
-vv_high_set <- vv_high_set[!vv_high_set %in% c(high_set, very_high_set)]
+#vv_high_set <- suspects_for_violin %>%
+#  filter(bias_category == "very_very_high") %>%
+#  pull(GO_category)
+#vv_high_set <- vv_high_set[!vv_high_set %in% c(high_set, very_high_set)]
 
 suspects <- list(
    "high_transcripts"      = high_set,
-   "very_high_transcripts" = very_high_set, 
-   "vv_high_transcripts"   = vv_high_set
+   "very_high_transcripts" = very_high_set#, 
+   #"vv_high_transcripts"   = vv_high_set
 )
-
 
 ```
 
