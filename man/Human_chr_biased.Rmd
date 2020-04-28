@@ -1,0 +1,305 @@
+---
+title: "Human chromosome biased"
+author: "Laura Biggins"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE, message = FALSE, warning = FALSE}
+library(knitr)
+library(rmdformats)
+## Global options
+options(max.print="75")
+display_code <- FALSE
+knitr::opts_knit$set(global.par = TRUE, width=75)
+knitr::opts_chunk$set(
+                echo    = display_code,
+                prompt  = FALSE,
+                tidy    = TRUE,
+                comment = NA,
+                message = FALSE,
+                warning = FALSE)
+                #cache=TRUE)
+
+library(rmdformats)
+library(runGOA)
+library(magrittr)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(beanplot)
+palette(brewer.pal(6, "Set2"))
+
+par(mgp = c(2, 0.5, 0))
+par(mar = par()$mar * 0.7)
+#load_all()
+min_appearances <- 20
+```
+
+```{r DT_function}
+dt_setup <-  function(data, n_rows = 10, lineHeight="80%") {
+  DT::datatable(data,
+                rownames = FALSE,
+                options = list(dom = 't', 
+                              pageLength = n_rows)
+  ) %>%
+  DT::formatStyle(0, target = 'row', lineHeight = lineHeight)
+}
+
+dark_b_blue <- "#374772" 
+light_b_blue <- "#3cc1f2"
+```
+
+### Generate lists of human genes biased by the the chromosome that they're on.
+
+Use a gene info file derived from a gtf file from Ensembl containing all the genes
+and transcripts in the human genome.
+
+<div class = "row">
+<div class = "col-md-4">
+
+```{r import_genfo_file}
+# The gene info file contains the number of transcripts of all the genes in the human genome. 
+# The processing of it is described in the processing_gtf file.
+load("../data/genfo.rda")
+load("../data/all_go_categories_human.rda")
+
+all_GO_annotated_genes <- unique(as.vector(unlist(all_go_categories_human)))
+
+genfo_all <- genfo
+
+genfo <- genfo %>%
+    filter(gene_name %in% all_GO_annotated_genes)
+
+# count number of duplicate gene names - decide what to do about them...
+genfo %>%
+  count(gene_name) %>%
+  filter(n > 1) %>%
+  arrange(desc(n)) %>%
+  dt_setup(n_rows = 8)
+```
+
+</div>
+<div class = "col-md-1"></div>
+<div class = "col-md-7">
+<br><br>
+This table show the number of times that a gene name appears in the genome annotated 
+as a distinct gene. <br>
+There are lots of duplicate gene names so we'll use the Ensembl gene IDs for the 
+initial processing. <br> 
+The gene set files that we use for the GO analysis do not contain Ensembl IDs so
+we'll have to convert back to gene name at the point when we run the GO analysis.
+<br><br>
+<font size ="1">The highly duplicated gene names probably aren't in the GO 
+annotations much but it'd be worth checking.</font>
+<br><br>
+</div>
+</div>
+```{r dup_Ensembl_IDs}
+duplicated_Ensembl_IDs <- genfo %>%
+                            count(gene_id) %>%
+                            filter(n > 1) %>%
+                            count() %>%
+                            pull()
+```
+
+There are `r duplicated_Ensembl_IDs` duplicate Ensembl IDs so we'll use these for 
+filtering and convert back to gene name at the end of this analysis. 
+<br><br>
+
+```{r}
+chr_order <- c(1:22, "MT", "X", "Y")
+```
+
+## Number of genes per chromosome
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+genfo <- genfo %>%
+    select(gene_id, gene_name, chromosome) 
+
+dt_setup(genfo)
+```
+
+</div>
+<div class = "col-md-6">
+```{r}
+no_per_chr <- genfo %>%
+    count(chromosome)# %>%
+   # mutate(chromosome =  forcats::fct_reorder(chromosome, chr_order)) %>%
+  #arrange(chromosome)
+    #arrange(forcats::fct_reorder(chromosome, chr_order))
+
+dt_setup(no_per_chr)
+```
+</div>
+</div>
+
+```{r helper_functions}
+get_random_sample_for_category <- function(category, n_genes_to_select = 200) {
+    
+    filtered <- filter(genfo, chromosome == category)
+    
+    if(nrow(filtered) > n_genes_to_select){
+    
+      genes <- filtered  %>%
+          sample_n(size = n_genes_to_select) %>%
+          pull(gene_name)
+    
+    } else{  
+      
+      genes <- pull(filtered, gene_name)
+    }  
+  
+    genes  
+}       
+```
+
+
+```{r GO_analysis, eval = FALSE}
+# This code is run once to get the GO analysis results- it takes a while to run
+# it 100 times for each bias category.
+
+# There are some duplicate gene names - MATR3 has 11 transcripts and 28 transcripts, TBCE has 19 and 57.
+# Maybe this doesn't matter here, we're seeing what comes up when selecting genes with high transcripts. 
+
+#load("../data/all_go_categories_human.rda")
+load("../data/all_background_genes_human.rda")
+
+# set up the summary files so we can populate them as we get the GO analysis results
+go_category_counts <- tibble(GO_category = names(all_go_categories_human))
+
+no_cats <- length(chr_order)
+
+summary_stats <- tibble(
+                      run_number         = rep(1:100, times = no_cats), 
+                      bias_category      = rep(chr_order[1:no_cats], each = 100), 
+                      sig_number_results = 0)
+
+summary_stats$sig_number_results %<>% as.integer
+
+# more efficient to pass this as an argument than having to calculate it each time
+# the overrep test is run
+unique_genes_in_categories <- unique(as.vector(unlist(all_go_categories_human)))
+
+#for (i in 1:length(thresholds$category)){
+#the very_very high category only has 183 genes so there's no point in randomly sampling
+#that for 200 genes, 100 times. 
+#
+#
+#!! This needs simplifying - there's too much in here to go wrong - latest was
+#Error: Names must be unique. 
+for (i in 1:no_cats){  
+   
+    chr <- i 
+    bias_category <- paste0("chr", chr_order[i])
+    go_category_counts <- mutate(go_category_counts, occurrences = 0)
+
+    for(j in 1:100) {
+
+        genes <- get_random_sample_for_category(chr)
+        
+        go_results <- overrep_test(all_go_categories_human, 
+                                   query_genes = genes, 
+                                   all_background_genes_human, 
+                                   unique_genes_in_categories = unique_genes_in_categories,
+                                   min_genes_in_category = 1, 
+                                   max_genes_in_category = 500000)
+        
+        if(length(go_results) > 0){
+           
+            summary_stats <- summary_stats %>%
+                mutate(sig_number_results = if_else(
+                    bias_category == !!chr & run_number == j, 
+                    nrow(go_results), 
+                    sig_number_results
+                ))
+        }  
+        go_category_counts <- go_category_counts %>%
+            mutate(occurrences = if_else(GO_category %in% rownames(go_results), 
+                                         occurrences + 1, 
+                                         occurrences)
+                   ) 
+    }
+
+    # I couldn't get tidyverse to work properly with mutating column names and adding to them, so we'll rename afterwards
+    go_category_counts <- rename(go_category_counts, !!bias_category := occurrences)
+}
+
+human_chr_biased  <- go_category_counts
+human_chr_summary <- summary_stats
+
+usethis::use_data(human_chr_biased, overwrite = TRUE)
+usethis::use_data(human_chr_summary, overwrite = TRUE)
+```
+
+<div class = "row">
+<div class = "col-md-6">
+```{r}
+load("../data/human_chr_biased.rda")
+load("../data/human_chr_summary.rda")
+
+category_counts <- human_chr_summary %>%
+    filter(sig_number_results > 0) %>%
+    group_by(bias_category) %>%
+    count(bias_category)
+
+dt_setup(category_counts)
+```
+</div>
+<div class = "col-md-6">
+<br><br>
+The table shows the number of functional enrichment analyses that returned 1 or 
+more significantly enriched categories from the 100 that were run. 
+</div> 
+</div>
+</div> 
+<br>
+<div class = "row">
+<div class = "col-md-6">
+```{r fig.height = 4, fig.width = 10}
+no_categories <- human_chr_summary %>% 
+  select(bias_category) %>% 
+  unique() %>% 
+  count() %>% 
+  pull()
+
+
+human_chr_summary %>%
+    ggplot(aes(x = bias_category, y = sig_number_results)) +
+    geom_violin(fill = light_b_blue, colour = dark_b_blue, lwd = 0.8) +
+    xlab("") +
+    ylab("number of categories") +
+    theme_bw() +
+    theme(axis.text.x = element_text(size = 12)) #+
+   # geom_label(data = category_counts, colour = dark_b_blue, fill = "lightgrey", aes(label = paste0("n=",n), x = 1:no_categories, y = 250)) #+
+ # geom_boxplot(width = 0.005)
+```
+
+```{r}
+all_identified_categories <- human_chr_biased %>%
+  filter_at(vars(-GO_category), any_vars(. > 0)) 
+
+dt_setup(all_identified_categories)
+```
+
+In total, `r nrow(all_identified_categories)` functional categories appeared 
+at least once.
+
+## Filter Categories
+
+We don't want categories that only appeared a handful of times so we'll use an 
+arbitrary value of `r min_appearances` as a threshold.
+
+```{r}
+results <- human_chr_biased %>%
+  tidyr::pivot_longer(starts_with("chr"), names_to = "chromosome", values_to = "occurrences") %>%
+  filter(occurrences >= min_appearances)
+
+dt_setup(results)
+```
+
+
